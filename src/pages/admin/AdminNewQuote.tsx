@@ -48,7 +48,7 @@ type NewQuoteFormValues = {
   requestId: string;
   serviceType: string;
   templateId: string;
-  discountType: "" | "percent" | "quantity";
+  discountType: "none" | "percent" | "quantity";
   discountValue: string;
   amount: string;
   deadlineText: string;
@@ -109,9 +109,9 @@ const AdminNewQuote = () => {
       clientPhone: "",
       clientSegment: "",
       requestId: "",
-      serviceType: "",
-      templateId: "",
-      discountType: "",
+      serviceType: "general",
+      templateId: "none",
+      discountType: "none",
       discountValue: "",
       amount: "",
       deadlineText: "",
@@ -148,7 +148,7 @@ const AdminNewQuote = () => {
     if (!template.is_active) {
       return false;
     }
-    if (!selectedServiceType) {
+    if (!selectedServiceType || selectedServiceType === "general") {
       return true;
     }
     return template.service_type === selectedServiceType;
@@ -178,7 +178,7 @@ const AdminNewQuote = () => {
   }, [watchedItems]);
 
   const discountCents = useMemo(() => {
-    if (!discountType) {
+    if (!discountType || discountType === "none") {
       return 0;
     }
 
@@ -223,6 +223,23 @@ const AdminNewQuote = () => {
     }
   }, [requests, selectedRequestId, setValue]);
 
+  useEffect(() => {
+    if (!selectedTemplateId || selectedTemplateId === "none") {
+      return;
+    }
+
+    const template = templates.find((item) => item.id === selectedTemplateId);
+    if (template?.service_type && !selectedServiceType) {
+      setValue("serviceType", template.service_type);
+    }
+  }, [selectedTemplateId, selectedServiceType, setValue, templates]);
+
+  useEffect(() => {
+    if (!discountType || discountType === "none") {
+      setValue("discountValue", "");
+    }
+  }, [discountType, setValue]);
+
   const handleAddService = () => {
     const service = activeServices.find((item) => item.id === selectedServiceId);
     if (!service) {
@@ -240,7 +257,7 @@ const AdminNewQuote = () => {
     if (!watch("deadlineText") && service.default_deadline_text) {
       setValue("deadlineText", service.default_deadline_text);
     }
-    if (!watch("serviceType") && service.service_type) {
+    if ((watch("serviceType") === "general" || !watch("serviceType")) && service.service_type) {
       setValue("serviceType", service.service_type);
     }
     setSelectedServiceId("");
@@ -286,7 +303,8 @@ const AdminNewQuote = () => {
         0
       );
 
-      const discountTypeValue = values.discountType || null;
+      const discountTypeValue =
+        values.discountType && values.discountType !== "none" ? values.discountType : null;
       const discountPercent = discountTypeValue === "percent"
         ? Math.min(Math.max(Number(values.discountValue.replace(",", ".")) || 0, 0), 100)
         : 0;
@@ -307,6 +325,7 @@ const AdminNewQuote = () => {
       const amountCents = itemRows.length > 0 ? Math.max(0, itemsTotal - discountCents) : fallbackAmount;
 
       const requestId = values.requestId && values.requestId !== "none" ? values.requestId : null;
+      const templateId = values.templateId && values.templateId !== "none" ? values.templateId : null;
       const quote = await createQuote({
         title: values.title,
         clientId,
@@ -315,7 +334,7 @@ const AdminNewQuote = () => {
         deadlineText: values.deadlineText || null,
         status: values.status,
         notes: values.notes || null,
-        templateId: values.templateId || null,
+        templateId,
         discountType: discountTypeValue,
         discountPercent,
         discountQuantity,
@@ -335,7 +354,7 @@ const AdminNewQuote = () => {
         );
       }
 
-      const template = templates.find((item) => item.id === values.templateId);
+      const template = templates.find((item) => item.id === templateId);
       if (template?.body) {
         const validityDays = settings?.proposal_validity_days ?? 14;
         const validUntil = format(
@@ -514,6 +533,53 @@ const AdminNewQuote = () => {
               </div>
             </div>
 
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="serviceType">Tipo de servico</Label>
+                <Controller
+                  control={control}
+                  name="serviceType"
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger id="serviceType">
+                        <SelectValue placeholder="Selecione o tipo" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="general">Geral</SelectItem>
+                        {serviceTypeOptions.map((type) => (
+                          <SelectItem key={type} value={type}>
+                            {type}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="templateId">Template de proposta</Label>
+                <Controller
+                  control={control}
+                  name="templateId"
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger id="templateId">
+                        <SelectValue placeholder="Selecione um template" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Sem template</SelectItem>
+                        {availableTemplates.map((template) => (
+                          <SelectItem key={template.id} value={template.id}>
+                            {template.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
+            </div>
+
             {selectedClientId === "new" && (
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2 md:col-span-2">
@@ -619,6 +685,7 @@ const AdminNewQuote = () => {
                           "Servico selecionado"}
                       </p>
                     ) : null}
+                    <input type="hidden" {...register(`items.${index}.serviceId`)} />
                     <div className="mt-3 grid gap-4 md:grid-cols-2">
                       <div className="space-y-2 md:col-span-2">
                         <Label htmlFor={`item-title-${index}`}>Titulo</Label>
@@ -662,7 +729,28 @@ const AdminNewQuote = () => {
               </div>
 
               <div className="rounded-lg border border-dashed border-border/60 p-4 text-sm text-muted-foreground">
-                Total calculado: <span className="font-semibold text-foreground">{formatCurrency(itemsTotalCents)}</span>
+                <div className="flex flex-wrap items-center gap-4">
+                  <span>
+                    Subtotal:{" "}
+                    <span className="font-semibold text-foreground">
+                      {formatCurrency(itemsTotalCents)}
+                    </span>
+                  </span>
+                  {discountType !== "none" ? (
+                    <span>
+                      Desconto:{" "}
+                      <span className="font-semibold text-foreground">
+                        -{formatCurrency(discountCents)}
+                      </span>
+                    </span>
+                  ) : null}
+                  <span>
+                    Total:{" "}
+                    <span className="font-semibold text-foreground">
+                      {formatCurrency(Math.max(0, itemsTotalCents - discountCents))}
+                    </span>
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -687,6 +775,36 @@ const AdminNewQuote = () => {
                   placeholder="Ex: 8 semanas"
                   {...register("deadlineText")}
                 />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="discountType">Tipo de desconto</Label>
+                <Controller
+                  control={control}
+                  name="discountType"
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger id="discountType">
+                        <SelectValue placeholder="Sem desconto" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Sem desconto</SelectItem>
+                        <SelectItem value="percent">Percentual (%)</SelectItem>
+                        <SelectItem value="quantity">Valor fixo (R$)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="discountValue">Valor do desconto</Label>
+                  <Input
+                    id="discountValue"
+                    type="number"
+                    step="0.01"
+                    placeholder={discountType === "percent" ? "10" : "500"}
+                    {...register("discountValue")}
+                    disabled={discountType === "none"}
+                  />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="status">Status inicial</Label>

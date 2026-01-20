@@ -14,6 +14,7 @@ import Services from "./pages/Services";
 import RequestQuote from "./pages/RequestQuote";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
+import PublicQuote from "./pages/PublicQuote";
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import AdminLogin from "./pages/admin/AdminLogin";
 import AdminRequests from "./pages/admin/AdminRequests";
@@ -50,6 +51,7 @@ const App = () => (
               <Route path="/portfolio/:id" element={<PortfolioDetail />} />
               <Route path="/servicos" element={<Services />} />
               <Route path="/solicitar-orcamento" element={<RequestQuote />} />
+              <Route path="/proposta/:token" element={<PublicQuote />} />
               <Route path="/privacidade" element={<Privacy />} />
               <Route path="/termos" element={<Terms />} />
             </Route>

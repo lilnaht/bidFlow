@@ -56,6 +56,10 @@ const AdminDashboard = () => {
       .filter((quote) => quote.status === "approved")
       .reduce((sum, quote) => sum + (quote.amount_cents || 0), 0);
 
+    const openRevenue = quotes
+      .filter((quote) => ["draft", "sent"].includes(quote.status))
+      .reduce((sum, quote) => sum + (quote.amount_cents || 0), 0);
+
     const sentRevenue = quotes
       .filter((quote) => quote.status === "sent")
       .reduce((sum, quote) => sum + (quote.amount_cents || 0), 0);
@@ -68,6 +72,7 @@ const AdminDashboard = () => {
       totalQuotes,
       conversionRate,
       approvedRevenue,
+      openRevenue,
       sentRevenue,
     };
   }, [quotes, requests]);
@@ -298,17 +303,31 @@ const AdminDashboard = () => {
                 <CardContent className="space-y-4">
                   {settings?.monthly_goal_cents ? (
                     <>
-                      <div className="flex items-center justify-between text-sm text-muted-foreground">
-                        <span>{formatCurrency(metrics.approvedRevenue)} confirmados</span>
-                        <span>
-                          {Math.min(
-                            100,
-                            Math.round(
-                              (metrics.approvedRevenue / settings.monthly_goal_cents) * 100
-                            )
-                          )}
-                          %
-                        </span>
+                      <div className="space-y-2 text-sm text-muted-foreground">
+                        <div className="flex items-center justify-between">
+                          <span>{formatCurrency(metrics.approvedRevenue)} fechados</span>
+                          <span>
+                            {Math.min(
+                              100,
+                              Math.round(
+                                (metrics.approvedRevenue / settings.monthly_goal_cents) * 100
+                              )
+                            )}
+                            %
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span>{formatCurrency(metrics.openRevenue)} em aberto</span>
+                          <span>
+                            {Math.min(
+                              100,
+                              Math.round(
+                                (metrics.openRevenue / settings.monthly_goal_cents) * 100
+                              )
+                            )}
+                            %
+                          </span>
+                        </div>
                       </div>
                       <Progress
                         value={Math.min(

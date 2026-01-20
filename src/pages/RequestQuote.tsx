@@ -27,7 +27,7 @@ const requestSchema = z.object({
   whatsapp: z.string()
     .min(10, "WhatsApp inválido")
     .max(20, "WhatsApp inválido")
-    .regex(/^[\d\s\-\(\)\+]+$/, "WhatsApp deve conter apenas números")
+    .regex(/^[\d\s\-()+]+$/, "WhatsApp deve conter apenas números")
     .trim(),
   projectType: z.string()
     .min(1, "Selecione o tipo de projeto"),

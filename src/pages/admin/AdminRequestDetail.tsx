@@ -103,7 +103,8 @@ const AdminRequestDetail = () => {
           entityType: "request",
           entityId: request.id,
           action: "status_updated",
-          details: { status: nextStatus },
+          payload: { status: nextStatus },
+          actorId: user?.id ?? null,
           createdBy: user?.id ?? null,
         }).catch(() => undefined);
       }
@@ -403,6 +404,7 @@ const AdminRequestDetail = () => {
                             <SelectItem value="doing">Em andamento</SelectItem>
                             <SelectItem value="done">Concluida</SelectItem>
                             <SelectItem value="blocked">Bloqueada</SelectItem>
+                            <SelectItem value="canceled">Cancelada</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,20 +11,28 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
 import {
+  createAttachment,
   createActivityLog,
   createQuoteItems,
+  createQuoteVersion,
+  fetchAttachments,
   fetchActivityLog,
   fetchQuoteById,
-  updateQuoteAmount,
+  fetchQuoteAcceptances,
+  fetchQuoteEvents,
+  fetchQuoteVersions,
+  updateQuotePricing,
   updateQuoteStatus,
 } from "@/integrations/supabase/queries";
-import { formatCurrency, formatRelativeTime } from "@/lib/format";
+import { formatCurrency, formatDate, formatRelativeTime } from "@/lib/format";
 import { quoteStatusLabels, quoteStatusStyles, type QuoteStatus } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSettings } from "@/hooks/use-settings";
 import QuotePdfDocument from "@/components/pdf/QuotePdf";
-import { Download } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { calculateDiscountCents, calculateQuoteTotals } from "@/lib/quote";
+import { Download, Link as LinkIcon, Upload } from "lucide-react";
 
 type NewItemFormValues = {
   title: string;
@@ -39,6 +47,9 @@ const AdminQuoteDetail = () => {
   const { user } = useAuth();
   const { settings } = useSettings();
   const [isGenerating, setIsGenerating] = useState(false);
+  const [versionReason, setVersionReason] = useState("");
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const {
     register,
@@ -65,17 +76,42 @@ const AdminQuoteDetail = () => {
     enabled: Boolean(id),
   });
 
+  const { data: attachments = [] } = useQuery({
+    queryKey: ["attachments", "quote", id],
+    queryFn: () => fetchAttachments("quote", id as string),
+    enabled: Boolean(id),
+  });
+
+  const { data: acceptances = [] } = useQuery({
+    queryKey: ["quote_acceptances", id],
+    queryFn: () => fetchQuoteAcceptances(id as string),
+    enabled: Boolean(id),
+  });
+
+  const { data: events = [] } = useQuery({
+    queryKey: ["quote_events", id],
+    queryFn: () => fetchQuoteEvents(id as string),
+    enabled: Boolean(id),
+  });
+
+  const { data: versions = [] } = useQuery({
+    queryKey: ["quote_versions", id],
+    queryFn: () => fetchQuoteVersions(id as string),
+    enabled: Boolean(id),
+  });
+
   useEffect(() => {
     if (quote?.status) {
       setStatus(quote.status);
     }
   }, [quote]);
 
-  const itemsTotal = useMemo(() => {
-    return (quote?.items ?? []).reduce((sum, item) => {
-      return sum + item.quantity * item.unit_price_cents;
-    }, 0);
-  }, [quote?.items]);
+  const totals = useMemo(() => {
+    if (!quote) {
+      return { itemsTotal: 0, discountCents: 0, totalCents: 0 };
+    }
+    return calculateQuoteTotals(quote.items ?? [], quote);
+  }, [quote]);
 
   const handleDownloadPdf = async () => {
     if (!quote) {
@@ -109,6 +145,52 @@ const AdminQuoteDetail = () => {
     }
   };
 
+  const handleCopyLink = async (link: string) => {
+    try {
+      await navigator.clipboard.writeText(link);
+      toast({
+        title: "Link copiado",
+        description: "O link publico foi copiado.",
+      });
+    } catch (error) {
+      toast({
+        title: "Nao foi possivel copiar",
+        description: "Copie manualmente o link.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleAttachmentOpen = async (attachment: typeof attachments[number]) => {
+    try {
+      const bucket = attachment.bucket || "quote-attachments";
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .createSignedUrl(attachment.storage_path, 300);
+      if (error) {
+        throw error;
+      }
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, "_blank", "noopener");
+      }
+    } catch (error) {
+      toast({
+        title: "Erro ao abrir anexo",
+        description: "Nao foi possivel gerar o link do arquivo.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    uploadMutation.mutate(file);
+    event.target.value = "";
+  };
+
   const mutation = useMutation({
     mutationFn: (nextStatus: QuoteStatus) => updateQuoteStatus(id as string, nextStatus),
     onSuccess: (_data, nextStatus) => {
@@ -124,7 +206,8 @@ const AdminQuoteDetail = () => {
           entityType: "quote",
           entityId: quote.id,
           action: "status_updated",
-          details: { status: nextStatus },
+          payload: { status: nextStatus },
+          actorId: user?.id ?? null,
           createdBy: user?.id ?? null,
         }).catch(() => undefined);
       }
@@ -152,8 +235,27 @@ const AdminQuoteDetail = () => {
         },
       ]);
 
-      const nextTotal = itemsTotal + quantity * unitPriceCents;
-      await updateQuoteAmount(quote?.id as string, nextTotal);
+      const currentItemsTotal = (quote?.items ?? []).reduce(
+        (sum, item) => sum + item.quantity * item.unit_price_cents,
+        0
+      );
+      const nextItemsTotal = currentItemsTotal + quantity * unitPriceCents;
+      const discountCents = calculateDiscountCents(nextItemsTotal, {
+        discount_type: quote?.discount_type ?? null,
+        discount_percent: quote?.discount_percent ?? 0,
+        discount_quantity: quote?.discount_quantity ?? 0,
+        amount_cents: 0,
+      });
+      const nextTotal = Math.max(0, nextItemsTotal - discountCents);
+      await updateQuotePricing({
+        id: quote?.id as string,
+        amountCents: nextTotal,
+        discountType: quote?.discount_type ?? null,
+        discountPercent: quote?.discount_percent ?? 0,
+        discountQuantity: quote?.discount_quantity ?? 0,
+        templateId: quote?.template_id ?? null,
+        templateSnapshot: quote?.template_snapshot ?? null,
+      });
 
       return items;
     },
@@ -170,6 +272,7 @@ const AdminQuoteDetail = () => {
           entityType: "quote",
           entityId: quote.id,
           action: "item_added",
+          actorId: user?.id ?? null,
           createdBy: user?.id ?? null,
         }).catch(() => undefined);
       }
@@ -179,6 +282,78 @@ const AdminQuoteDetail = () => {
       toast({
         title: "Erro ao adicionar item",
         description: "Nao foi possivel salvar o item.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      if (!quote) {
+        throw new Error("Proposta nao carregada.");
+      }
+      const bucket = "quote-attachments";
+      const safeName = file.name.replace(/[^\w.-]+/g, "-");
+      const path = `quotes/${quote.id}/${crypto.randomUUID()}-${safeName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(path, file, { upsert: false });
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      return createAttachment({
+        entityType: "quote",
+        entityId: quote.id,
+        bucket,
+        storagePath: path,
+        fileName: file.name,
+        fileType: file.type || null,
+        fileSize: file.size,
+        uploadedBy: user?.id ?? null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["attachments", "quote", id] });
+      toast({
+        title: "Anexo enviado",
+        description: "O arquivo foi anexado com sucesso.",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Erro ao enviar",
+        description: "Nao foi possivel anexar o arquivo.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const versionMutation = useMutation({
+    mutationFn: async () => {
+      if (!quote) {
+        throw new Error("Proposta nao carregada.");
+      }
+      await createQuoteVersion({
+        quoteId: quote.id,
+        reason: versionReason || null,
+        createdBy: user?.id ?? null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["quote_versions", id] });
+      toast({
+        title: "Versao criada",
+        description: "Snapshot registrado com sucesso.",
+      });
+      setVersionReason("");
+    },
+    onError: () => {
+      toast({
+        title: "Erro ao versionar",
+        description: "Nao foi possivel criar a versao.",
         variant: "destructive",
       });
     },
@@ -211,6 +386,25 @@ const AdminQuoteDetail = () => {
       </div>
     );
   }
+
+  const publicUrl =
+    quote.public_token && typeof window !== "undefined"
+      ? `${window.location.origin}/proposta/${quote.public_token}`
+      : null;
+
+  const selectedVersion =
+    versions.find((version) => version.id === selectedVersionId) ?? null;
+  const snapshot = selectedVersion?.snapshot as
+    | { quote?: { amount_cents?: number; title?: string }; items?: Array<{ title?: string; quantity?: number; unit_price_cents?: number }> }
+    | undefined;
+  const snapshotItems = snapshot?.items ?? [];
+  const snapshotTotal = snapshotItems.length > 0
+    ? snapshotItems.reduce(
+        (sum, item) => sum + (item.quantity ?? 0) * (item.unit_price_cents ?? 0),
+        0
+      )
+    : snapshot?.quote?.amount_cents ?? 0;
+  const snapshotDiff = snapshotTotal - totals.totalCents;
 
   return (
     <div className="space-y-6">
@@ -252,12 +446,25 @@ const AdminQuoteDetail = () => {
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Valor</p>
-              <p className="text-sm text-foreground">{formatCurrency(quote.amount_cents)}</p>
+              <p className="text-sm text-foreground">
+                {formatCurrency(totals.totalCents)}
+              </p>
+              {quote.discount_type ? (
+                <p className="text-xs text-muted-foreground">
+                  Desconto aplicado: -{formatCurrency(totals.discountCents)}
+                </p>
+              ) : null}
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Prazo</p>
               <p className="text-sm text-foreground">
                 {quote.deadline_text ? quote.deadline_text : "A definir"}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Template</p>
+              <p className="text-sm text-foreground">
+                {quote.template_id ? "Template aplicado" : "Sem template"}
               </p>
             </div>
             <div>
@@ -300,6 +507,36 @@ const AdminQuoteDetail = () => {
               </div>
             </div>
             <div>
+              <p className="text-sm text-muted-foreground">Link publico</p>
+              {publicUrl ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleCopyLink(publicUrl)}
+                  >
+                    <LinkIcon className="h-4 w-4" />
+                    Copiar link
+                  </Button>
+                  <Button asChild variant="ghost" size="sm">
+                    <a href={publicUrl} target="_blank" rel="noreferrer">
+                      Abrir pagina
+                    </a>
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Defina o status como enviado para gerar o link.
+                </p>
+              )}
+              {quote.public_expires_at ? (
+                <p className="text-xs text-muted-foreground">
+                  Expira em {formatDate(quote.public_expires_at)}
+                </p>
+              ) : null}
+            </div>
+            <div>
               <p className="text-sm text-muted-foreground">Observacoes</p>
               <p className="text-sm text-foreground">{quote.notes ?? "Sem observacoes."}</p>
             </div>
@@ -331,10 +568,28 @@ const AdminQuoteDetail = () => {
                 </div>
               ))}
               <div className="rounded-lg border border-dashed border-border/60 p-4 text-sm text-muted-foreground">
-                Total calculado:{" "}
-                <span className="font-semibold text-foreground">
-                  {formatCurrency(itemsTotal)}
-                </span>
+                <div className="flex flex-wrap items-center gap-4">
+                  <span>
+                    Subtotal:{" "}
+                    <span className="font-semibold text-foreground">
+                      {formatCurrency(totals.itemsTotal)}
+                    </span>
+                  </span>
+                  {quote.discount_type ? (
+                    <span>
+                      Desconto:{" "}
+                      <span className="font-semibold text-foreground">
+                        -{formatCurrency(totals.discountCents)}
+                      </span>
+                    </span>
+                  ) : null}
+                  <span>
+                    Total:{" "}
+                    <span className="font-semibold text-foreground">
+                      {formatCurrency(totals.totalCents)}
+                    </span>
+                  </span>
+                </div>
               </div>
             </div>
           ) : (
@@ -383,6 +638,212 @@ const AdminQuoteDetail = () => {
               </Button>
             </div>
           </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="text-lg font-semibold">Anexos</CardTitle>
+            <CardDescription>Envie contratos, referencias e arquivos de apoio.</CardDescription>
+          </div>
+          <div className="flex gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadMutation.isPending}
+            >
+              <Upload className="h-4 w-4" />
+              {uploadMutation.isPending ? "Enviando..." : "Adicionar arquivo"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {attachments.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border/60 p-6 text-sm text-muted-foreground">
+              Nenhum anexo enviado ainda.
+            </div>
+          ) : (
+            attachments.map((attachment) => (
+              <div
+                key={attachment.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 p-3"
+              >
+                <div>
+                  <p className="text-sm font-medium text-foreground">{attachment.file_name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {attachment.file_type ?? "Arquivo"} •{" "}
+                    {attachment.file_size ? `${Math.round(attachment.file_size / 1024)} KB` : "Tamanho desconhecido"}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleAttachmentOpen(attachment)}
+                >
+                  Visualizar
+                </Button>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      {quote.template_snapshot ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold">Template aplicado</CardTitle>
+            <CardDescription>Snapshot do conteudo enviado ao cliente.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-lg border border-border/60 bg-muted/30 p-4 text-sm text-foreground whitespace-pre-line">
+              {quote.template_snapshot}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">Versoes do orcamento</CardTitle>
+          <CardDescription>Crie snapshots para comparar mudancas.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end">
+            <div className="flex-1 space-y-2">
+              <Label htmlFor="version-reason">Motivo (opcional)</Label>
+              <Input
+                id="version-reason"
+                value={versionReason}
+                onChange={(event) => setVersionReason(event.target.value)}
+                placeholder="Ajuste de escopo ou desconto"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => versionMutation.mutate()}
+              disabled={versionMutation.isPending}
+            >
+              {versionMutation.isPending ? "Salvando..." : "Criar versao"}
+            </Button>
+          </div>
+
+          {versions.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border/60 p-6 text-sm text-muted-foreground">
+              Nenhuma versao registrada ainda.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {versions.map((version) => (
+                <div
+                  key={version.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 p-3"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Versao {version.version}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatRelativeTime(version.created_at)}{" "}
+                      {version.reason ? `• ${version.reason}` : ""}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedVersionId(version.id)}
+                  >
+                    Ver snapshot
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {selectedVersion ? (
+            <div className="rounded-lg border border-border/60 p-4 text-sm text-muted-foreground">
+              <p className="text-sm font-semibold text-foreground">
+                Snapshot v{selectedVersion.version}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Total na versao: {formatCurrency(snapshotTotal)} • Diferenca{" "}
+                {snapshotDiff >= 0 ? "+" : ""}
+                {formatCurrency(snapshotDiff)}
+              </p>
+              <div className="mt-2 space-y-1">
+                {snapshotItems.length === 0 ? (
+                  <p>Nenhum item registrado na versao.</p>
+                ) : (
+                  snapshotItems.map((item, index) => (
+                    <p key={`${selectedVersion.id}-${index}`}>
+                      {item.title ?? "Item"} • {item.quantity ?? 0} x{" "}
+                      {formatCurrency(item.unit_price_cents ?? 0)}
+                    </p>
+                  ))
+                )}
+              </div>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">Aceites e eventos</CardTitle>
+          <CardDescription>Registro de aprovacoes, recusas e acessos.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-6 lg:grid-cols-2">
+          <div className="space-y-3">
+            <p className="text-sm font-semibold text-foreground">Aceites</p>
+            {acceptances.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border/60 p-4 text-sm text-muted-foreground">
+                Nenhum aceite registrado.
+              </div>
+            ) : (
+              acceptances.map((acceptance) => (
+                <div key={acceptance.id} className="rounded-lg border border-border/60 p-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold text-foreground">{acceptance.name}</p>
+                    <Badge variant="secondary">{acceptance.status}</Badge>
+                  </div>
+                  {acceptance.comment ? (
+                    <p className="text-xs text-muted-foreground">{acceptance.comment}</p>
+                  ) : null}
+                  <p className="text-xs text-muted-foreground">
+                    {formatRelativeTime(acceptance.created_at)}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="space-y-3">
+            <p className="text-sm font-semibold text-foreground">Eventos</p>
+            {events.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border/60 p-4 text-sm text-muted-foreground">
+                Nenhum evento registrado.
+              </div>
+            ) : (
+              events.map((event) => (
+                <div key={event.id} className="rounded-lg border border-border/60 p-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold text-foreground">{event.event_type}</p>
+                    <span className="text-xs text-muted-foreground">
+                      {formatRelativeTime(event.created_at)}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </CardContent>
       </Card>
 

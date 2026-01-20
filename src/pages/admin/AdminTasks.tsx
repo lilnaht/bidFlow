@@ -243,6 +243,7 @@ const AdminTasks = () => {
                               <SelectItem value="doing">Em andamento</SelectItem>
                               <SelectItem value="done">Concluida</SelectItem>
                               <SelectItem value="blocked">Bloqueada</SelectItem>
+                              <SelectItem value="canceled">Cancelada</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>

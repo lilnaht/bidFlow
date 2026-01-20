@@ -1,16 +1,18 @@
-import { useMemo } from "react";
+import { useMemo, useState, type DragEvent } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { fetchQuotes } from "@/integrations/supabase/queries";
+import { createActivityLog, fetchQuotes, updateQuoteStatus } from "@/integrations/supabase/queries";
 import { formatCurrency, formatRelativeTime } from "@/lib/format";
-import { quoteStatusLabels, quoteStatusStyles } from "@/lib/status";
+import { quoteStatusLabels, quoteStatusStyles, type QuoteStatus } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { CheckCircle2, ClipboardList, Plus, Receipt, XCircle } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { toast } from "@/hooks/use-toast";
 
 const filters = [
   { value: "all", label: "Todos", filter: () => true },
@@ -21,9 +23,40 @@ const filters = [
 ];
 
 const AdminQuotes = () => {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
   const { data: quotes = [], isLoading, error } = useQuery({
     queryKey: ["quotes"],
     queryFn: fetchQuotes,
+  });
+  const [view, setView] = useState<"table" | "kanban">("table");
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: QuoteStatus }) =>
+      updateQuoteStatus(id, status),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["quotes"] });
+      toast({
+        title: "Status atualizado",
+        description: "A proposta foi movida com sucesso.",
+      });
+      createActivityLog({
+        entityType: "quote",
+        entityId: variables.id,
+        action: "status_updated",
+        payload: { status: variables.status, origin: "kanban" },
+        actorId: user?.id ?? null,
+        createdBy: user?.id ?? null,
+      }).catch(() => undefined);
+    },
+    onError: () => {
+      toast({
+        title: "Erro ao mover",
+        description: "Nao foi possivel atualizar o status.",
+        variant: "destructive",
+      });
+    },
   });
 
   const summary = useMemo(() => {
@@ -70,6 +103,36 @@ const AdminQuotes = () => {
     }, {});
   }, [quotes]);
 
+  const kanbanColumns: Array<{ status: QuoteStatus; title: string }> = [
+    { status: "draft", title: "Em edicao" },
+    { status: "sent", title: "Enviados" },
+    { status: "approved", title: "Aprovados" },
+    { status: "lost", title: "Perdidos" },
+  ];
+
+  const handleDragStart = (id: string) => (event: DragEvent<HTMLDivElement>) => {
+    event.dataTransfer.setData("text/plain", id);
+    setDraggingId(id);
+  };
+
+  const handleDragEnd = () => {
+    setDraggingId(null);
+  };
+
+  const handleDrop = (status: QuoteStatus) => (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const id = event.dataTransfer.getData("text/plain");
+    if (!id) {
+      return;
+    }
+    const target = quotes.find((quote) => quote.id === id);
+    if (!target || target.status === status) {
+      return;
+    }
+    statusMutation.mutate({ id, status });
+    setDraggingId(null);
+  };
+
   if (error) {
     return (
       <div className="rounded-2xl border border-border/60 bg-card p-6">
@@ -90,12 +153,30 @@ const AdminQuotes = () => {
             Acompanhe propostas em andamento e metricas de conversao.
           </p>
         </div>
-        <Button asChild size="sm">
-          <Link to="/admin/orcamentos/novo">
-            <Plus className="h-4 w-4" />
-            Nova proposta
-          </Link>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant={view === "table" ? "default" : "outline"}
+            onClick={() => setView("table")}
+          >
+            Lista
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={view === "kanban" ? "default" : "outline"}
+            onClick={() => setView("kanban")}
+          >
+            Kanban
+          </Button>
+          <Button asChild size="sm">
+            <Link to="/admin/orcamentos/novo">
+              <Plus className="h-4 w-4" />
+              Nova proposta
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
@@ -124,7 +205,7 @@ const AdminQuotes = () => {
         <div className="rounded-2xl border border-border/60 bg-card p-6 text-sm text-muted-foreground">
           Carregando propostas...
         </div>
-      ) : (
+      ) : view === "table" ? (
         <Tabs defaultValue="all">
           <TabsList className="flex flex-wrap gap-2 bg-transparent p-0">
             {filters.map((filter) => (
@@ -209,6 +290,65 @@ const AdminQuotes = () => {
             );
           })}
         </Tabs>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-4">
+          {kanbanColumns.map((column) => {
+            const items = quotes.filter((quote) => quote.status === column.status);
+            return (
+              <div
+                key={column.status}
+                className="rounded-xl border border-border/60 bg-card p-4"
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={handleDrop(column.status)}
+              >
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">{column.title}</p>
+                    <p className="text-xs text-muted-foreground">{items.length} propostas</p>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {items.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                      Arraste propostas para esta etapa.
+                    </div>
+                  ) : (
+                    items.map((item) => (
+                      <div
+                        key={item.id}
+                        className={cn(
+                          "rounded-lg border border-border/60 bg-background p-3 shadow-sm",
+                          draggingId === item.id && "opacity-60"
+                        )}
+                        draggable
+                        onDragStart={handleDragStart(item.id)}
+                        onDragEnd={handleDragEnd}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-foreground">{item.title}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {item.client?.name ?? "Cliente nao informado"}
+                            </p>
+                          </div>
+                          <Badge className={cn("border-0", quoteStatusStyles[item.status])}>
+                            {quoteStatusLabels[item.status]}
+                          </Badge>
+                        </div>
+                        <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+                          <span>{formatCurrency(item.amount_cents)}</span>
+                          <Link to={`/admin/orcamentos/${item.id}`} className="text-primary">
+                            Abrir
+                          </Link>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );

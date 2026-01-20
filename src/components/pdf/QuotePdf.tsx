@@ -1,6 +1,7 @@
 import { Document, Image, Page, StyleSheet, Text, View } from "@react-pdf/renderer";
 import type { SettingsRow, QuoteWithItems } from "@/integrations/supabase/queries";
 import { formatCurrency } from "@/lib/format";
+import { calculateQuoteTotals } from "@/lib/quote";
 import { format } from "date-fns";
 
 type QuotePdfProps = {
@@ -128,11 +129,7 @@ const styles = StyleSheet.create({
 
 const QuotePdfDocument = ({ quote, settings, logoUrl }: QuotePdfProps) => {
   const items = quote.items ?? [];
-  const itemsTotal = items.reduce(
-    (sum, item) => sum + item.quantity * item.unit_price_cents,
-    0
-  );
-  const totalCents = items.length > 0 ? itemsTotal : quote.amount_cents;
+  const totals = calculateQuoteTotals(items, quote);
   const createdAt = quote.created_at ? format(new Date(quote.created_at), "dd/MM/yyyy") : "-";
   const validityDays = settings?.proposal_validity_days ?? 14;
   const validUntil = quote.created_at
@@ -195,12 +192,12 @@ const QuotePdfDocument = ({ quote, settings, logoUrl }: QuotePdfProps) => {
             <View style={styles.tableRow}>
               <Text style={styles.colItem}>Servico principal</Text>
               <Text style={styles.colQty}>1</Text>
-              <Text style={styles.colUnit}>{formatCurrency(totalCents)}</Text>
-              <Text style={styles.colTotal}>{formatCurrency(totalCents)}</Text>
-            </View>
-          ) : (
-            items.map((item) => (
-              <View key={item.id} style={styles.tableRow}>
+            <Text style={styles.colUnit}>{formatCurrency(totals.totalCents)}</Text>
+            <Text style={styles.colTotal}>{formatCurrency(totals.totalCents)}</Text>
+          </View>
+        ) : (
+          items.map((item) => (
+            <View key={item.id} style={styles.tableRow}>
                 <Text style={styles.colItem}>{item.title}</Text>
                 <Text style={styles.colQty}>{item.quantity}</Text>
                 <Text style={styles.colUnit}>{formatCurrency(item.unit_price_cents)}</Text>
@@ -212,8 +209,14 @@ const QuotePdfDocument = ({ quote, settings, logoUrl }: QuotePdfProps) => {
           )}
 
           <View style={styles.totalBox}>
+            {totals.discountCents > 0 ? (
+              <>
+                <Text style={styles.totalLabel}>Subtotal: {formatCurrency(totals.itemsTotal)}</Text>
+                <Text style={styles.totalLabel}>Desconto: -{formatCurrency(totals.discountCents)}</Text>
+              </>
+            ) : null}
             <Text style={styles.totalLabel}>Total</Text>
-            <Text style={styles.totalValue}>{formatCurrency(totalCents)}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(totals.totalCents)}</Text>
           </View>
         </View>
 

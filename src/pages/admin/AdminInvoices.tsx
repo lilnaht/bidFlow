@@ -134,14 +134,15 @@ const AdminInvoices = () => {
                   <TableHead>Cliente</TableHead>
                   <TableHead>Valor</TableHead>
                   <TableHead>Vencimento</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Pago em</TableHead>
-                  <TableHead className="text-right">Acoes</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {invoices.map((invoice) => (
-                  <TableRow key={invoice.id}>
+                <TableHead>Status</TableHead>
+                <TableHead>Pago em</TableHead>
+                <TableHead>Link</TableHead>
+                <TableHead className="text-right">Acoes</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {invoices.map((invoice) => (
+                <TableRow key={invoice.id}>
                     <TableCell className="font-medium text-foreground">
                       {invoice.quote?.title ?? "Sem proposta"}
                     </TableCell>
@@ -157,6 +158,20 @@ const AdminInvoices = () => {
                     <TableCell className="text-muted-foreground">{invoice.status}</TableCell>
                     <TableCell className="text-muted-foreground">
                       {invoice.paid_at ? invoice.paid_at.slice(0, 10) : "-"}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {invoice.payment_url ? (
+                        <a
+                          href={invoice.payment_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-primary"
+                        >
+                          Abrir
+                        </a>
+                      ) : (
+                        "-"
+                      )}
                     </TableCell>
                     <TableCell className="text-right">
                       <Button variant="ghost" size="sm" onClick={() => startEdit(invoice)}>

@@ -1,5 +1,6 @@
 import { formatDistanceToNowStrict } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { format } from "date-fns";
 
 export const formatCurrency = (amountCents?: number | null) => {
   const amount = typeof amountCents === "number" ? amountCents / 100 : 0;
@@ -19,4 +20,12 @@ export const formatRelativeTime = (date?: string | null) => {
     addSuffix: true,
     locale: ptBR,
   });
+};
+
+export const formatDate = (date?: string | null, pattern = "dd/MM/yyyy") => {
+  if (!date) {
+    return "-";
+  }
+
+  return format(new Date(date), pattern);
 };

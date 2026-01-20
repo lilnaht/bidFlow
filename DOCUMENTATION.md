@@ -9,6 +9,7 @@ bidFlow is a single-company CRM + quoting system with:
 - Admin panel with authentication and role-based access (admin/staff).
 - Supabase as database + auth + realtime.
 - PDF generation for professional quotes.
+- Public quote links with acceptance flow and signed attachments.
 
 ## 2) Tech Stack
 
@@ -27,6 +28,7 @@ bidFlow is a single-company CRM + quoting system with:
 - `src/contexts/` auth context
 - `src/hooks/` reusable hooks (settings)
 - `supabase/migrations/` database schema and RLS
+- `supabase/functions/` Edge Functions (public form, quote events, accept/decline)
 - `public/` static assets (favicon/logo)
 
 ## 4) Environment Variables
@@ -74,11 +76,21 @@ Required in `.env`:
 - `supabase/migrations/202501150003_extended_schema.sql`
   - contacts, quote_items, tasks, activity_log, attachments
   - RLS policies for new tables
+- `supabase/migrations/202501150004_public_quote_features.sql`
+  - public quote links, templates, services, versions, acceptances, events, invoices
+  - follow-up task triggers on sent quotes
+- `supabase/migrations/202501150005_public_access_and_audit.sql`
+  - audit_log with old/new payloads
+  - activity_log payload/actor_id
+  - public quote RPCs for accept/events
 
 ### RLS Summary
 - Public:
   - `requests` insert from form only (status=new, source=form, client_id null)
   - `settings` select (for branding on public site)
+- Token-based:
+  - public quote access via `get_public_quote(token)` RPC
+  - accept/decline via `record_quote_acceptance(token, ...)` RPC
 - Staff/Admin:
   - read/write for clients, requests, quotes, contacts, quote_items, tasks, activity_log, attachments
 - Admin only:
@@ -129,11 +141,15 @@ Routes:
 - `/admin/orcamentos`
 - `/admin/orcamentos/novo`
 - `/admin/orcamentos/:id`
+- `/admin/servicos`
+- `/admin/templates`
+- `/admin/faturas`
 - `/admin/clientes`
 - `/admin/clientes/novo`
 - `/admin/clientes/:id`
 - `/admin/tarefas`
 - `/admin/usuarios`
+- `/admin/relatorios`
 - `/admin/configuracoes`
 
 Key capabilities:
@@ -145,6 +161,10 @@ Key capabilities:
 - Settings form controls branding and proposal defaults
 - Activity log on key entities
 - PDF generation for professional proposals
+- Kanban boards for requests and quotes
+- Services catalog + proposal templates by service type
+- Quote versions and acceptance history
+- Invoices tracking (external payment link)
 
 ## 10) Public Site Features
 
@@ -152,12 +172,14 @@ Key capabilities:
 - Request form writes to `requests` table
 - Branding (name, email, phone, address) sourced from settings
 - Logo: `public/logo2.png`
+- Public proposal page: `/proposta/:token`
 
 ## 11) PDF Generation
 
 Implemented in:
 - `src/components/pdf/QuotePdf.tsx`
 - `src/pages/admin/AdminQuoteDetail.tsx`
+  - `src/pages/PublicQuote.tsx`
 
 Workflow:
 - Admin clicks "Baixar PDF"
@@ -208,6 +230,11 @@ update public.profiles set role = 'admin' where email = 'you@example.com';
 ```
 - Enable Realtime replication for tables you need in the Supabase dashboard
 - For attachments: create a Supabase Storage bucket and store file metadata in `attachments`
+- Deploy Edge Functions:
+  - `submit-request` (public form validation + rate limit + captcha)
+  - `quote-event` (opened/clicked/downloaded)
+  - `quote-response` (accept/decline)
+  - `quote-attachments` (signed URLs)
 
 ## 15) Single-Company Assumption
 
