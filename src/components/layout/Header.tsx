@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Menu, X, FileText, Briefcase, Home, Phone } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/hooks/use-settings";
-import logoMark from "../../../img/logo2.png";
+import logoMark from "@/assets/logo2.png";
 
 const navLinks = [
   { href: "/", label: "Início", icon: Home },

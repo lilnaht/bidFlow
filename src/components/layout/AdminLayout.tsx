@@ -38,7 +38,7 @@ import { fetchRequests } from "@/integrations/supabase/queries";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSettings } from "@/hooks/use-settings";
-import logoMark from "../../../img/logo2.png";
+import logoMark from "@/assets/logo2.png";
 
 const navItems = [
   { title: "Painel", href: "/admin", icon: LayoutDashboard, exact: true },
